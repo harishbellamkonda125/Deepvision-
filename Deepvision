@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>DeepVision — PC-only Single File Demo</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!-- Load React + ReactDOM + Babel for single-file demo -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    /* Minimal aesthetic similar to Deepen/Telus */
+    :root{
+      --bg:#f8fafc; --card:#fff; --muted:#6b7280; --accent:#0ea5e9;
+    }
+    html,body,#root{height:100%}
+    body{margin:0;background:var(--bg);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial;color:#0f172a}
+    .container{max-width:1200px;margin:18px auto;padding:16px}
+    header{background:#fff;border-bottom:1px solid #eef2f7}
+    .nav-inner{max-width:1200px;margin:0 auto;display:flex;justify-content:space-between;align-items:center;padding:12px 20px}
+    .brand{font-weight:700;color:var(--accent);font-size:20px}
+    .btn{background:var(--accent);color:white;padding:8px 12px;border-radius:8px;border:none;cursor:pointer}
+    .muted{color:var(--muted)}
+    .hero{display:flex;gap:28px;align-items:center;justify-content:space-between;padding:36px 20px;background:linear-gradient(90deg,#f0f9ff,white);border-radius:8px}
+    .card{background:var(--card);padding:16px;border-radius:10px;box-shadow:0 6px 20px rgba(2,6,23,.06)}
+    .grid{display:grid;gap:16px}
+    .features{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+    .studio{display:grid;grid-template-columns:2fr 1fr;gap:16px}
+    .studio .canvas{border:1px solid #e6edf3;border-radius:8px;min-height:420px;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;background:#f8fafc}
+    .toolbar{display:flex;gap:8px;margin-bottom:12px}
+    .file-input{display:inline-block}
+    .annotation-item{padding:8px;border-radius:6px;display:flex;justify-content:space-between;align-items:center}
+    .overlay-point{width:18px;height:18px;border-radius:50%;border:2px solid rgba(220,38,38,.95);background:#fff;position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;cursor:pointer}
+    .overlay-rect{position:absolute;border:2px solid rgba(220,38,38,.95);background:rgba(255,255,255,0.95);padding:6px;border-radius:8px;cursor:pointer;box-sizing:border-box;min-width:2px;min-height:2px}
+    .controls-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    footer{margin-top:36px;padding:18px;text-align:center;color:var(--muted);font-size:14px}
+    .small{font-size:13px;color:var(--muted)}
+    /* PC-only overlay */
+    .pc-overlay{
+      position:fixed;
+      inset:0;
+      background:linear-gradient(180deg, rgba(15,23,42,0.95), rgba(15,23,42,0.95));
+      color:white;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      z-index:9999;
+      padding:24px;
+      text-align:center;
+    }
+    .pc-overlay .panel{
+      max-width:700px;
+      border-radius:12px;
+      padding:28px;
+      background:rgba(0,0,0,0.45);
+      box-shadow:0 10px 40px rgba(2,6,23,.6);
+      backdrop-filter: blur(4px);
+    }
+    .pc-overlay h2{margin:0 0 8px 0;font-size:22px}
+    .pc-overlay p{margin:0 0 12px 0;opacity:0.95}
+    .pc-overlay .hint{opacity:0.85;font-size:13px}
+    /* responsive */
+    @media (max-width:900px){ .studio{grid-template-columns:1fr} .hero{flex-direction:column;align-items:flex-start} }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- The entire app as a single-file React implementation, PC-only -->
+  <script type="text/babel">
+    const { useState, useRef, useEffect, useCallback } = React;
+
+    /*************************************************************************
+     * PC-only behavior:
+     * This single-file demo will detect if the visitor is on a desktop/PC.
+     * If the visitor is on a mobile or touch device, the app will be blocked
+     * by a full-screen overlay explaining that the app is for PC only.
+     *
+     * Detection heuristics:
+     *  - userAgent mobile keywords
+     *  - presence of touch capabilities (ontouchstart, maxTouchPoints)
+     *  - small screen width (< 900px) treated as non-PC
+     *
+     * NOTE: Heuristics are conservative: if a tablet/2-in-1 with touch is used,
+     * it may be blocked. Adjust logic below if you want to be more permissive.
+     *************************************************************************/
+
+    function isLikelyMobile() {
+      // user agent check
+      const ua = (navigator.userAgent || '').toLowerCase();
+      const mobileKeywords = ['mobi','android','iphone','ipad','phone','tablet','ipod','blackberry','bb10','mobile'];
+      for (const k of mobileKeywords) {
+        if (ua.indexOf(k) !== -1) return true;
+      }
+
+      // touch capability
+      if ('ontouchstart' in window) return true;
+      if (navigator.maxTouchPoints && navigator.maxTouchPoints > 1) return true;
+
+      // small viewport heuristic
+      if (Math.min(window.innerWidth, window.innerHeight) < 900) return true;
+
+      return false;
+    }
+
+    // -------- Utilities --------
+    const uid = (p='a') => p + '_' + Math.random().toString(36).slice(2,9);
+    const clamp = (v,a=0,b=100) => Math.max(a, Math.min(b, v));
+
+    // -------- Navbar --------
+    function Navbar({ onOpenStudio }) {
+      return (
+        <header>
+          <div className="nav-inner">
+            <div style={{display:'flex',alignItems:'center',gap:16}}>
+              <div className="brand">DeepVision</div>
+              <nav className="small muted" style={{display:'flex',gap:12}}>
+                <a href="#features" className="muted">Features</a>
+                <a href="#studio" className="muted">Studio</a>
+                <a href="#pricing" className="muted">Pricing</a>
+              </nav>
+            </div>
+            <div>
+              <button className="btn" onClick={onOpenStudio}>Get Started</button>
+            </div>
+          </div>
+        </header>
+      );
+    }
+
+    // -------- Hero & Preview --------
+    function Hero({ onOpenStudio }) {
+      return (
+        <div className="hero card container" style={{alignItems:'center'}}>
+          <div style={{maxWidth:640}}>
+            <h1 style={{fontSize:34,margin:0}}>Computer vision tooling for teams (PC)</h1>
+            <p className="small muted" style={{marginTop:12}}>
+              Upload data, annotate quickly, run model-assisted labeling, and monitor quality — designed for desktop workflows.
+            </p>
+            <div style={{marginTop:16}}>
+              <button className="btn" onClick={onOpenStudio}>Try the Studio</button>
+              <button style={{marginLeft:8,padding:'8px 12px',borderRadius:8,border:'1px solid #e6edf3',background:'white',cursor:'pointer'}}>Learn more</button>
+            </div>
+          </div>
+          <div style={{width:420}}>
+            <div className="card" style={{padding:12}}>
+              <MockUploaderPreview />
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function MockUploaderPreview(){
+      const [fileUrl, setFileUrl] = useState(null);
+      function onSelect(e){
+        const f = e.target.files?.[0];
+        if(!f) return setFileUrl(null);
+        setFileUrl(URL.createObjectURL(f));
+      }
+      return (
+        <div>
+          <div className="small muted">Upload an image to demo the annotation studio</div>
+          <input className="file-input" type="file" accept="image/*" onChange={onSelect} style={{marginTop:8}} />
+          <div style={{marginTop:12, height:160, border:'1px dashed #e6edf3', borderRadius:8, display:'flex',alignItems:'center',justifyContent:'center',background:'#fbfeff'}}>
+            {fileUrl ? <img src={fileUrl} alt="preview" style={{maxHeight:'100%', maxWidth:'100%', objectFit:'contain'}}/> : <div className="muted small">Preview area</div>}
+          </div>
+        </div>
+      );
+    }
+
+    // -------- Annotation Overlay components --------
+    function AnnotationOverlay({ annotation, imageRect, isSelected, onSelect, onDelete }) {
+      if (!imageRect) return null;
+      const px = (v) => (imageRect.width * v) / 100;
+      const py = (v) => (imageRect.height * v) / 100;
+
+      if (annotation.type === 'point') {
+        const style = {
+          left: px(annotation.x),
+          top: py(annotation.y),
+          transform: 'translate(-50%,-50%)',
+        };
+        return (
+          <div
+            className="overlay-point"
+            style={{...style, boxShadow: isSelected ? '0 6px 18px rgba(0,0,0,.15)' : undefined, background: isSelected ? '#dc2626' : '#fff'}}
+            onClick={(e)=>{e.stopPropagation(); onSelect(annotation.id);}}
+            onDoubleClick={(e)=>{e.stopPropagation(); onDelete(annotation.id);}}
+            title={annotation.label || 'Point'}
+            role="button"
+            tabIndex={0}
+          />
+        );
+      } else {
+        const style = {
+          left: px(annotation.x),
+          top: py(annotation.y),
+          width: Math.max(2, px(annotation.w ?? 0)),
+          height: Math.max(2, py(annotation.h ?? 0)),
+        };
+        return (
+          <div
+            className="overlay-rect"
+            style={{...style, boxShadow: isSelected ? '0 6px 18px rgba(0,0,0,.12)' : undefined}}
+            onClick={(e)=>{e.stopPropagation(); onSelect(annotation.id);}}
+            onDoubleClick={(e)=>{e.stopPropagation(); onDelete(annotation.id);}}
+            title={annotation.label || 'Box'}
+            role="button"
+            tabIndex={0}
+          >
+            <div style={{fontSize:12,fontWeight:700}}>{annotation.label || 'Box'}</div>
+          </div>
+        );
+      }
+    }
+
+    // -------- OverlayContainer positions overlays relative to the image --------
+    function OverlayContainer({ imageRef, annotations, selectedId, onSelect, onDelete }) {
+      const [rect, setRect] = useState(null);
+
+      useEffect(() => {
+        function update() {
+          if (!imageRef.current) { setRect(null); return; }
+          setRect(imageRef.current.getBoundingClientRect());
+        }
+        update();
+        const ro = new ResizeObserver(update);
+        if (imageRef.current) ro.observe(imageRef.current);
+        window.addEventListener('resize', update);
+        window.addEventListener('scroll', update, true);
+        return () => { ro.disconnect(); window.removeEventListener('resize', update); window.removeEventListener('scroll', update, true); };
+      }, [imageRef]);
+
+      if (!rect) return null;
+
+      const containerStyle = {
+        position:'absolute',
+        left: rect.left + window.scrollX,
+        top: rect.top + window.scrollY,
+        width: rect.width,
+        height: rect.height,
+        pointerEvents:'none'
+      };
+
+      return (
+        <div style={containerStyle} aria-hidden={false}>
+          <div style={{position:'relative', width:'100%', height:'100%'}}>
+            {annotations.map(a => (
+              <div key={a.id} style={{pointerEvents:'auto'}}>
+                <AnnotationOverlay
+                  annotation={a}
+                  imageRect={rect}
+                  isSelected={a.id === selectedId}
+                  onSelect={onSelect}
+                  onDelete={onDelete}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // -------- Annotation Studio (core) --------
+    function AnnotationStudio({ blocked }) {
+      const [imageUrl, setImageUrl] = useState(null);
+      const [tool, setTool] = useState('rect'); // 'rect' | 'point'
+      const [annotations, setAnnotations] = useState([]);
+      const [selectedId, setSelectedId] = useState(null);
+      const imgRef = useRef(null);
+
+      const [history, setHistory] = useState([]);
+      const [future, setFuture] = useState([]);
+
+      // load persisted demo annotations
+      useEffect(() => {
+        const v = localStorage.getItem('deepvision_demo_annotations');
+        if (v) {
+          try { setAnnotations(JSON.parse(v)); } catch(e){/*ignore*/ }
+        }
+      }, []);
+
+      useEffect(() => {
+        localStorage.setItem('deepvision_demo_annotations', JSON.stringify(annotations));
+      }, [annotations]);
+
+      const clientToPct = useCallback((clientX, clientY) => {
+        if (!imgRef.current) return {x:0,y:0};
+        const r = imgRef.current.getBoundingClientRect();
+        const x = clamp(((clientX - r.left)/r.width) * 100, 0, 100);
+        const y = clamp(((clientY - r.top)/r.height) * 100, 0, 100);
+        return {x,y};
+      }, []);
+
+      const pushHistory = (snap) => {
+        const s = JSON.stringify(snap ?? annotations);
+        setHistory(h => [...h, s].slice(-60));
+        setFuture([]);
+      };
+
+      const undo = () => {
+        if (history.length === 0) return;
+        const last = history[history.length - 1];
+        setFuture(f => [JSON.stringify(annotations), ...f]);
+        setHistory(h => h.slice(0,-1));
+        setAnnotations(JSON.parse(last));
+        setSelectedId(null);
+      };
+
+      const redo = () => {
+        if (future.length === 0) return;
+        const f = future[0];
+        setHistory(h => [...h, JSON.stringify(annotations)]);
+        setFuture(ff => ff.slice(1));
+        setAnnotations(JSON.parse(f));
+        setSelectedId(null);
+      };
+
+      // pointer creation & state
+      const pointerState = useRef(null);
+
+      function onImagePointerDown(e) {
+        if (blocked) return; // prevent interactions on blocked devices
+        if (!imgRef.current) return;
+        const p = clientToPct(e.clientX, e.clientY);
+        if (tool === 'point') {
+          const a = { id: uid('pt'), type:'point', x: p.x, y: p.y, label:'Point' };
+          setAnnotations(s => {
+            const next = [...s, a];
+            pushHistory(next);
+            return next;
+          });
+          setSelectedId(a.id);
+        } else {
+          const id = uid('r');
+          const a = { id, type:'rect', x: p.x, y: p.y, w:1, h:1, label:'Box' };
+          setAnnotations(s => [...s, a]);
+          pointerState.current = { mode:'rect', id, start: p, orig: a };
+          setSelectedId(id);
+        }
+      }
+
+      useEffect(() => {
+        function onMove(e) {
+          const st = pointerState.current;
+          if (!st || st.mode !== 'rect' || !st.id || !st.start) return;
+          const p = clientToPct(e.clientX, e.clientY);
+          const x = Math.min(st.start.x, p.x);
+          const y = Math.min(st.start.y, p.y);
+          const w = Math.abs(p.x - st.start.x);
+          const h = Math.abs(p.y - st.start.y);
+          setAnnotations(s => s.map(it => it.id === st.id ? {...it, x, y, w, h} : it));
+        }
+        function onUp() {
+          const st = pointerState.current;
+          if (st && st.mode === 'rect' && st.id) {
+            const a = annotations.find(it => it.id === st.id);
+            if (a && ((a.w ?? 0) < 0.4 || (a.h ?? 0) < 0.4)) {
+              setAnnotations(s => s.filter(it => it.id !== st.id));
+            } else {
+              pushHistory();
+            }
+          }
+          pointerState.current = null;
+        }
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        return () => {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+        };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [annotations, clientToPct]);
+
+      function onDeleteAnnotation(id) {
+        setAnnotations(s => {
+          const next = s.filter(a => a.id !== id);
+          pushHistory(next);
+          return next;
+        });
+        if (selectedId === id) setSelectedId(null);
+      }
+
+      function exportJson() {
+        const blob = new Blob([JSON.stringify(annotations, null, 2)], {type:'application/json'});
+        const url = URL.createObjectURL(blob);
+        const el = document.createElement('a');
+        el.href = url; el.download = 'annotations.json';
+        document.body.appendChild(el);
+        el.click();
+        el.remove();
+        URL.revokeObjectURL(url);
+      }
+
+      function clearAll() {
+        setAnnotations([]);
+        setSelectedId(null);
+        pushHistory([]);
+      }
+
+      return (
+        <div id="studio" className="container" style={{marginTop:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+            <h2 style={{margin:0}}>Annotation Studio (demo)</h2>
+            <div className="controls-row">
+              <div className="toolbar card" style={{padding:8}}>
+                <button className={`btn`} style={{background: tool==='rect' ? '#0369a1' : '#fff', color: tool==='rect'? '#fff' : '#0369a1'}} onClick={() => setTool('rect')} disabled={blocked}>Rect</button>
+                <button className={`btn`} style={{background: tool==='point' ? '#0369a1' : '#fff', color: tool==='point'? '#fff' : '#0369a1', marginLeft:8}} onClick={() => setTool('point')} disabled={blocked}>Point</button>
+                <button style={{marginLeft:8,padding:'8px 12px',borderRadius:8}} onClick={undo} disabled={blocked}>Undo</button>
+                <button style={{marginLeft:8,padding:'8px 12px',borderRadius:8}} onClick={redo} disabled={blocked}>Redo</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="studio">
+            <div className="card">
+              <div style={{marginBottom:12, display:'flex',gap:12, alignItems:'center'}}>
+                <input type="file" accept="image/*" onChange={(e)=>{ if(blocked) return; const f = e.target.files?.[0]; if(!f) return; setImageUrl(URL.createObjectURL(f)); setAnnotations([]); setHistory([]); setFuture([]); }} disabled={blocked} />
+                <div className="small muted">{blocked ? 'Studio is available on desktop only' : 'Upload an image to annotate'}</div>
+              </div>
+
+              <div className="canvas" onClick={() => setSelectedId(null)}>
+                {imageUrl ? (
+                  <>
+                    <img ref={imgRef} src={imageUrl} alt="target" style={{maxWidth:'100%', maxHeight:'78vh', objectFit:'contain', display:'block'}} onPointerDown={onImagePointerDown} draggable={false} />
+                    <OverlayContainer imageRef={imgRef} annotations={annotations} selectedId={selectedId} onSelect={(id)=>setSelectedId(id)} onDelete={onDeleteAnnotation} />
+                  </>
+                ) : (
+                  <div className="small muted">{blocked ? 'Studio disabled on this device' : 'No image — upload one to start'}</div>
+                )}
+              </div>
+            </div>
+
+            <aside className="card">
+              <h3 style={{marginTop:0}}>Annotations</h3>
+              <div style={{marginTop:8, maxHeight:360, overflow:'auto'}}>
+                {annotations.length === 0 && <div className="small muted">No annotations yet</div>}
+                {annotations.map(a => (
+                  <div key={a.id} className="annotation-item" style={{background: a.id === selectedId ? '#f1f5f9' : 'transparent'}}>
+                    <div>
+                      <div style={{fontWeight:600}}>{a.label ?? (a.type === 'point' ? 'Point' : 'Box')}</div>
+                      <div className="small muted">{a.type === 'point' ? `(${a.x.toFixed(1)}%, ${a.y.toFixed(1)}%)` : `(${a.x.toFixed(1)}%, ${a.y.toFixed(1)}%) ${ (a.w ?? 0).toFixed(1)}%×${(a.h ?? 0).toFixed(1)}%`}</div>
+                    </div>
+                    <div style={{display:'flex',gap:8}}>
+                      <button style={{background:'transparent',border:'none',color:'#ef4444',cursor:'pointer'}} onClick={()=>onDeleteAnnotation(a.id)}>Delete</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{marginTop:12, display:'flex',gap:8}}>
+                <button onClick={exportJson} style={{padding:'8px 12px',borderRadius:8}} disabled={blocked}>Export JSON</button>
+                <button onClick={clearAll} style={{padding:'8px 12px',borderRadius:8}} disabled={blocked}>Clear</button>
+              </div>
+            </aside>
+          </div>
+        </div>
+      );
+    }
+
+    // -------- PC Overlay --------
+    function PCOnlyOverlay({ reason }) {
+      return (
+        <div className="pc-overlay" role="dialog" aria-modal="true">
+          <div className="panel">
+            <h2>Desktop-only experience</h2>
+            <p>DeepVision demo is optimized and allowed on desktop/PC browsers only.</p>
+            <p className="hint">Detected reason: <strong>{reason}</strong></p>
+            <p className="small" style={{marginTop:12}}>Please open this page on a desktop or laptop computer (non-touch preferred). Mobile and tablet devices are blocked to ensure reliable annotation experience.</p>
+          </div>
+        </div>
+      );
+    }
+
+    // -------- App (root) --------
+    function App(){
+      // decide if current client is permitted (desktop)
+      const [blocked, setBlocked] = useState(false);
+      const [reason, setReason] = useState('');
+
+      useEffect(() => {
+        // determine reason if blocked
+        const ua = (navigator.userAgent || '').toLowerCase();
+        const reasons = [];
+        const mobileKeywords = ['mobi','android','iphone','ipad','phone','tablet','ipod','blackberry','bb10','mobile'];
+        for (const k of mobileKeywords) if (ua.indexOf(k) !== -1) reasons.push('mobile user-agent');
+
+        if ('ontouchstart' in window) reasons.push('touch-capable device');
+        if (navigator.maxTouchPoints && navigator.maxTouchPoints > 1) reasons.push('multiple touch points');
+
+        if (Math.min(window.innerWidth, window.innerHeight) < 900) reasons.push('small viewport');
+
+        const isBlocked = reasons.length > 0;
+        setBlocked(isBlocked);
+        setReason(isBlocked ? reasons.join(', ') : 'desktop environment');
+      }, []);
+
+      const [showStudio, setShowStudio] = useState(false);
+      return (
+        <div>
+          <Navbar onOpenStudio={() => setShowStudio(true)} />
+          <main style={{maxWidth:1200, margin:'18px auto', padding:'0 16px 40px'}}>
+            <Hero onOpenStudio={() => setShowStudio(true)} />
+            <section id="features" className="container" style={{marginTop:20}}>
+              <h2>Features</h2>
+              <div className="features" style={{marginTop:12}}>
+                <div className="card"><strong>Collaborative Studio</strong><div className="small muted">Invite teammates, version datasets.</div></div>
+                <div className="card"><strong>Model-assisted labeling</strong><div className="small muted">Pre-label with model predictions.</div></div>
+                <div className="card"><strong>Quality & Metrics</strong><div className="small muted">Track accuracy and coverage.</div></div>
+              </div>
+            </section>
+
+            {showStudio ? <AnnotationStudio blocked={blocked} /> : (
+              <div className="container" style={{marginTop:20}}>
+                <div className="card" style={{padding:20}}>
+                  <h3 style={{marginTop:0}}>Demo Studio</h3>
+                  <p className="small muted">Click "Get Started" or "Try the Studio" to open the annotation studio demo (client-side only).</p>
+                </div>
+              </div>
+            )}
+
+            <section id="pricing" className="container" style={{marginTop:28}}>
+              <h2>Pricing</h2>
+              <div className="features" style={{marginTop:12}}>
+                <div className="card text-center"><strong>Starter</strong><div style={{fontSize:20,fontWeight:700}}>$0</div><div className="small muted">For trials</div></div>
+                <div className="card text-center"><strong>Team</strong><div style={{fontSize:20,fontWeight:700}}>$99/mo</div><div className="small muted">Collaboration</div></div>
+                <div className="card text-center"><strong>Enterprise</strong><div style={{fontSize:20,fontWeight:700}}>Contact</div><div className="small muted">SLA & On-prem</div></div>
+              </div>
+            </section>
+
+          </main>
+
+          <footer>
+            © {new Date().getFullYear()} DeepVision — Demo. Built as a single-file prototype.
+          </footer>
+
+          {/* Show the PC-only overlay when blocked */}
+          {blocked && <PCOnlyOverlay reason={reason} />}
+        </div>
+      );
+    }
+
+    // Render
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
